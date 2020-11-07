@@ -55,7 +55,12 @@ class CameraTracker:
         corners_1 = self.corners[frame_1]
         corners_2 = self.corners[frame_2]
         correspondences = build_correspondences(corners_1, corners_2, self.pc_builder.ids)
+        if len(correspondences.ids) == 0:
+            print("No correspondences found")
+            return
+
         print("Found {} correspondences".format(len(correspondences.ids)))
+
         triangulation_parameters = TriangulationParameters(max_reprojection_error,
                                                            min_angle,
                                                            0)
@@ -100,6 +105,9 @@ class CameraTracker:
             return
         else:
             print("Found {} inliers".format(len(inliers)))
+        if len(inliers) < 4:
+            print("Not enough inliers")
+            return
         points3d = points3d[inliers]
         corners_points = corners_points[inliers]
 
