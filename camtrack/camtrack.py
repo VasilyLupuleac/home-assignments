@@ -30,7 +30,7 @@ from data3d import CameraParameters, PointCloud, Pose
 
 class CameraTracker:
     MAX_REPR_ERROR = 3.0
-    MIN_ANGLE = 1.0
+    MIN_ANGLE = 0.8
     RANSAC_PROB = 0.999
 
     SEED = 1642832
