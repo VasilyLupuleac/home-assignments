@@ -17,7 +17,8 @@ __all__ = [
     'to_camera_center',
     'to_opencv_camera_mat3x3',
     'triangulate_correspondences',
-    'view_mat3x4_to_pose'
+    'view_mat3x4_to_pose',
+    'remove_correspondences_with_ids'
 ]
 
 from collections import namedtuple
@@ -142,6 +143,9 @@ def _remove_correspondences_with_ids(correspondences: Correspondences,
         correspondences.points_1[mask],
         correspondences.points_2[mask]
     )
+
+
+remove_correspondences_with_ids = _remove_correspondences_with_ids
 
 
 def build_correspondences(corners_1: FrameCorners, corners_2: FrameCorners,

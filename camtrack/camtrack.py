@@ -20,7 +20,9 @@ from _camtrack import (
     build_correspondences,
     triangulate_correspondences,
     TriangulationParameters,
-    rodrigues_and_translation_to_view_mat3x4
+    rodrigues_and_translation_to_view_mat3x4,
+    remove_correspondences_with_ids,
+    eye3x4
 )
 from corners import CornerStorage
 from data3d import CameraParameters, PointCloud, Pose
@@ -28,29 +30,105 @@ from data3d import CameraParameters, PointCloud, Pose
 
 class CameraTracker:
     MAX_REPR_ERROR = 3.0
+    MIN_ANGLE = 1.0
+    RANSAC_PROB = 0.999
+
+    SEED = 1642832
 
     def __init__(self,
                  intrinsic_mat,
                  corners: CornerStorage,
                  known_view_1: Optional[Tuple[int, Pose]] = None,
                  known_view_2: Optional[Tuple[int, Pose]] = None):
-        if known_view_1 is None or known_view_2 is None:
-            raise NotImplementedError()
         self.intrinsic_mat = intrinsic_mat
         self.corners = corners
         self.frame_count = len(corners)
         print("Found {} frames".format(self.frame_count))
         self.pc_builder = PointCloudBuilder()
-        frame_1 = known_view_1[0]
-        frame_2 = known_view_2[0]
+        if known_view_1 is None or known_view_2 is None:
+            frame_1, frame_2, view_mat_2 = self._find_initial_view_mats()
+            view_mat_1 = eye3x4()
+        else:
+            frame_1 = known_view_1[0]
+            frame_2 = known_view_2[0]
+            view_mat_1 = pose_to_view_mat3x4(known_view_2[1])
+            view_mat_2 = pose_to_view_mat3x4(known_view_2[1])
+            
         self.is_known = np.full(self.frame_count, False)
         self.is_known[frame_1] = True
         self.is_known[frame_2] = True
-        self.view_mats = [pose_to_view_mat3x4(known_view_1[1])] * self.frame_count
-        self.view_mats[frame_2] = pose_to_view_mat3x4(known_view_2[1])
+        self.view_mats = [view_mat_1] * self.frame_count
+        self.view_mats[frame_2] = view_mat_2
         self._extend_point_cloud(frame_1, frame_2, max_reprojection_error=10)
 
-    def _extend_point_cloud(self, frame_1, frame_2, max_reprojection_error=MAX_REPR_ERROR, min_angle=1.0):
+    def generate_frame_pairs(self):
+        np.random.seed(self.SEED)
+        n = self.frame_count
+
+        def neighb(x, rad=(n // 4 + 5)):
+            range_1 = np.arange(max(0, x - rad), x - 4)
+            x_1 = np.full_like(range_1, x)
+            range_2 = np.arange(x + 5, min(n, x + rad))
+            x_2 = np.full_like(range_2, x)
+            return np.column_stack((range_1, x_1)), np.column_stack((range_2, x_2))
+
+        rand_pairs = np.random.choice(n, (n // 2, 2), replace=False)
+        a = np.random.choice(n, replace=False)
+        b = (a + n // 2) % n
+        return np.concatenate((rand_pairs,
+                               *neighb(a),
+                               *neighb(b)),
+                               axis=0)
+
+    def _find_initial_view_mats(self):
+        max_points_count = 0
+        best_frame_1, best_frame_2 = 0, 1
+        best_pose = None
+        for frame_1, frame_2 in self._generate_frame_pairs():
+            pose, points_count = self._find_pose(frame_1, frame_2)
+            if points_count > max_points_count:
+                max_points_count = points_count
+                best_pose = pose
+                best_frame_1, best_frame_2 = frame_1, frame_2
+
+        return best_frame_1, best_frame_2, best_pose
+
+    def _find_pose(self, frame_1, frame_2):
+        corners_1 = self.corners[frame_1]
+        corners_2 = self.corners[frame_2]
+        correspondences = build_correspondences(corners_1, corners_2)
+
+        if len(correspondences.ids) < 5:
+            return None, 0
+        mat, mask = cv2.findEssentialMat(correspondences.points_1,
+                                         correspondences.points_2,
+                                         self.intrinsic_mat,
+                                         cv2.RANSAC,
+                                         self.RANSAC_PROB,
+                                         threshold=1)
+
+        correspondences = remove_correspondences_with_ids(correspondences,
+                                                          correspondences.ids[mask == 0])
+
+        R1, R2, t = cv2.decomposeEssentialMat(mat)
+        best_pose = None
+        max_points_count = 0
+        for R in (R1.T, R2.T):
+            for tr in (t, -t):
+                pose = Pose(R, R @ tr)
+                points, _, _ = triangulate_correspondences(correspondences,
+                                                           eye3x4(),
+                                                           pose_to_view_mat3x4(pose),
+                                                           self.intrinsic_mat,
+                                                           TriangulationParameters(self.MAX_REPR_ERROR,
+                                                                                   self.MIN_ANGLE,
+                                                                                   min_depth=0))
+                if len(points) > max_points_count:
+                    best_pose = pose
+                    max_points_count = len(points)
+        return best_pose, max_points_count
+
+    def _extend_point_cloud(self, frame_1, frame_2, max_reprojection_error=MAX_REPR_ERROR, min_angle=MIN_ANGLE):
         print("Calculating new 3D points using frames {} and {}".format(frame_1 + 1, frame_2 + 1))
         corners_1 = self.corners[frame_1]
         corners_2 = self.corners[frame_2]
@@ -96,7 +174,7 @@ class CameraTracker:
                                                     imagePoints=corners_points,
                                                     cameraMatrix=self.intrinsic_mat,
                                                     reprojectionError=self.MAX_REPR_ERROR,
-                                                    confidence=0.999,
+                                                    confidence=self.RANSAC_PROB,
                                                     distCoeffs=None,
                                                     flags=cv2.SOLVEPNP_EPNP)
 
@@ -148,7 +226,7 @@ class CameraTracker:
 
             for old_frame in old_frames:
                 self._extend_point_cloud(updated_frame, old_frame)
-
+        
         return self.view_mats, self.pc_builder
 
 
@@ -163,6 +241,9 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         camera_parameters,
         rgb_sequence[0].shape[0]
     )
+
+    if known_view_1 is None or known_view_2 is None:
+        known_view_1, known_view_2 = get_keks()
 
     view_mats, point_cloud_builder = CameraTracker(intrinsic_mat,
                                                    corner_storage,
