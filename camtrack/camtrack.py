@@ -29,9 +29,10 @@ from data3d import CameraParameters, PointCloud, Pose
 
 
 class CameraTracker:
-    MAX_REPR_ERROR = 3.0
-    MIN_ANGLE = 0.8
-    RANSAC_PROB = 0.999
+    MAX_REPR_ERROR = 5.0
+    MIN_ANGLE = 1.1
+    RANSAC_PROB = 0.99999
+    THRESHOLD = 0.2
 
     SEED = 1642832
 
@@ -110,7 +111,7 @@ class CameraTracker:
                                          self.intrinsic_mat,
                                          cv2.RANSAC,
                                          self.RANSAC_PROB,
-                                         threshold=1)
+                                         self.THRESHOLD)
         correspondences = remove_correspondences_with_ids(correspondences,
                                                           correspondences.ids[mask.flatten() == 0])
         R1, R2, t = cv2.decomposeEssentialMat(mat)
