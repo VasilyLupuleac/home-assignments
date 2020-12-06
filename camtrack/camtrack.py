@@ -53,7 +53,7 @@ class CameraTracker:
             frame_2 = known_view_2[0]
             view_mat_1 = pose_to_view_mat3x4(known_view_2[1])
             view_mat_2 = pose_to_view_mat3x4(known_view_2[1])
-            
+
         self.is_known = np.full(self.frame_count, False)
         self.is_known[frame_1] = True
         self.is_known[frame_2] = True
@@ -61,7 +61,7 @@ class CameraTracker:
         self.view_mats[frame_2] = view_mat_2
         self._extend_point_cloud(frame_1, frame_2, max_reprojection_error=10)
 
-    def generate_frame_pairs(self):
+    def _generate_frame_pairs(self):
         np.random.seed(self.SEED)
         n = self.frame_count
 
@@ -85,13 +85,17 @@ class CameraTracker:
         best_frame_1, best_frame_2 = 0, 1
         best_pose = None
         for frame_1, frame_2 in self._generate_frame_pairs():
+            print('Initializing: trying frames {} and {}'.format(frame_1,
+                                                                 frame_2))
             pose, points_count = self._find_pose(frame_1, frame_2)
             if points_count > max_points_count:
                 max_points_count = points_count
                 best_pose = pose
                 best_frame_1, best_frame_2 = frame_1, frame_2
 
-        return best_frame_1, best_frame_2, best_pose
+        print('Initialization complete. Selected frames: {} and {}'.format(best_frame_1,
+                                                                           best_frame_2))
+        return best_frame_1, best_frame_2, pose_to_view_mat3x4(best_pose)
 
     def _find_pose(self, frame_1, frame_2):
         corners_1 = self.corners[frame_1]
@@ -99,6 +103,7 @@ class CameraTracker:
         correspondences = build_correspondences(corners_1, corners_2)
 
         if len(correspondences.ids) < 5:
+            print('Not enough correspondences, aborting')
             return None, 0
         mat, mask = cv2.findEssentialMat(correspondences.points_1,
                                          correspondences.points_2,
@@ -106,10 +111,8 @@ class CameraTracker:
                                          cv2.RANSAC,
                                          self.RANSAC_PROB,
                                          threshold=1)
-
         correspondences = remove_correspondences_with_ids(correspondences,
-                                                          correspondences.ids[mask == 0])
-
+                                                          correspondences.ids[mask.flatten() == 0])
         R1, R2, t = cv2.decomposeEssentialMat(mat)
         best_pose = None
         max_points_count = 0
@@ -126,6 +129,7 @@ class CameraTracker:
                 if len(points) > max_points_count:
                     best_pose = pose
                     max_points_count = len(points)
+        print('Found {} points'.format(max_points_count))
         return best_pose, max_points_count
 
     def _extend_point_cloud(self, frame_1, frame_2, max_reprojection_error=MAX_REPR_ERROR, min_angle=MIN_ANGLE):
@@ -241,9 +245,6 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         camera_parameters,
         rgb_sequence[0].shape[0]
     )
-
-    if known_view_1 is None or known_view_2 is None:
-        known_view_1, known_view_2 = get_keks()
 
     view_mats, point_cloud_builder = CameraTracker(intrinsic_mat,
                                                    corner_storage,
