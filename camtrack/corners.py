@@ -25,11 +25,11 @@ def to_uint8(img):
 
 
 class CornerTracker:
-    MAX_CORNERS = 1000
+    MAX_CORNERS = 2000
     QUALITY_LEVEL = 0.01
     MIN_DISTANCE = 2
     WIN_SIZE = (15, 15)
-    BLOCK_SIZE = 10
+    BLOCK_SIZE = 5
     PYR_ITERS = 2
     TERM_CRITERIA = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.01)
 

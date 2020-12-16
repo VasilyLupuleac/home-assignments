@@ -29,10 +29,11 @@ from data3d import CameraParameters, PointCloud, Pose
 
 
 class CameraTracker:
-    MAX_REPR_ERROR = 5.0
-    MIN_ANGLE = 1.1
-    RANSAC_PROB = 0.99999
-    THRESHOLD = 0.2
+    MAX_REPR_ERROR = 6.5
+    MIN_ANGLE = 3
+    RANSAC_PROB = 0.9999
+    THRESHOLD = 0.5
+    HOMOGRAPHY_THRESHOLD = 0.5
 
     SEED = 1642832
 
@@ -94,6 +95,10 @@ class CameraTracker:
                 best_pose = pose
                 best_frame_1, best_frame_2 = frame_1, frame_2
 
+        if best_pose is None:
+            print('Initialization failed. No suitable frames found. Aborting program')
+            exit(0)
+
         print('Initialization complete. Selected frames: {} and {}'.format(best_frame_1,
                                                                            best_frame_2))
         return best_frame_1, best_frame_2, pose_to_view_mat3x4(best_pose)
@@ -112,8 +117,26 @@ class CameraTracker:
                                          cv2.RANSAC,
                                          self.RANSAC_PROB,
                                          self.THRESHOLD)
-        correspondences = remove_correspondences_with_ids(correspondences,
+
+        if mat is None:
+            print('Essential matrix could not be calculated')
+            return None, 0
+
+        if mask is not None:
+            correspondences = remove_correspondences_with_ids(correspondences,
                                                           correspondences.ids[mask.flatten() == 0])
+
+        _, homography_mask = cv2.findHomography(correspondences.points_1,
+                                                correspondences.points_2,
+                                                method=cv2.RANSAC,
+                                                confidence=self.RANSAC_PROB,
+                                                ransacReprojThreshold=self.THRESHOLD,
+                                                maxIters=1000)
+
+        if homography_mask is None or np.count_nonzero(homography_mask) / np.count_nonzero(mask) > self.HOMOGRAPHY_THRESHOLD:
+            print('Homography validation failed, aborting')
+            return None, 0
+
         R1, R2, t = cv2.decomposeEssentialMat(mat)
         best_pose = None
         max_points_count = 0
@@ -126,7 +149,7 @@ class CameraTracker:
                                                            self.intrinsic_mat,
                                                            TriangulationParameters(self.MAX_REPR_ERROR,
                                                                                    self.MIN_ANGLE,
-                                                                                   min_depth=0))
+                                                                                   min_depth=0.01))
                 if len(points) > max_points_count:
                     best_pose = pose
                     max_points_count = len(points)
