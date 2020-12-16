@@ -9,6 +9,8 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
+from scipy.optimize import least_squares
+
 import frameseq
 from _camtrack import (
     PointCloudBuilder,
@@ -22,7 +24,8 @@ from _camtrack import (
     TriangulationParameters,
     rodrigues_and_translation_to_view_mat3x4,
     remove_correspondences_with_ids,
-    eye3x4
+    eye3x4,
+    project_points
 )
 from corners import CornerStorage
 from data3d import CameraParameters, PointCloud, Pose
@@ -214,23 +217,28 @@ class CameraTracker:
         if len(inliers) < 4:
             print("Not enough inliers")
             return
-        points3d = points3d[inliers]
-        corners_points = corners_points[inliers]
 
-        success, R, t = cv2.solvePnP(objectPoints=points3d,
-                                     imagePoints=corners_points,
-                                     cameraMatrix=self.intrinsic_mat,
-                                     distCoeffs=None,
-                                     useExtrinsicGuess=True,
-                                     rvec=R,
-                                     tvec=t,
-                                     flags=cv2.SOLVEPNP_ITERATIVE)
+        points3d = points3d[inliers.flatten()]
+        corners_points = corners_points[inliers.flatten()]
+
+        def calc_errors(Rt):
+            R, t = Rt[:3], Rt[3:]
+            mat = np.concatenate((cv2.Rodrigues(R[:, np.newaxis])[0], t[:, np.newaxis]), axis=1)
+            return (project_points(points3d, self.intrinsic_mat @ mat) - corners_points).flatten()
+
+        Rt_res = least_squares(fun=calc_errors,
+                               x0=np.concatenate((R, t)).flatten(),
+                               loss='huber',
+                               method='trf').x
+        
+        R = Rt_res[:3].reshape((-1, 1))
+        t = Rt_res[3:].reshape((-1, 1))
 
         if not success:
             print("Unable to solve PnP\n")
             return
         else:
-            print("Position calculated successfully\n".format(len(inliers)))
+            print("Position calculated successfully. {} inliers found \n".format(len(inliers)))
 
         self.view_mats[frame] = rodrigues_and_translation_to_view_mat3x4(R, t)
         return R, t
